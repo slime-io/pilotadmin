@@ -12,7 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	istionetworkingapi "slime.io/slime/framework/apis/networking/v1alpha3"
 	"slime.io/slime/framework/bootstrap"
-	modapi "slime.io/slime/modules/pilotadmin/api/config/v1alpha1"
+	modapi "slime.io/slime/modules/pilotadmin/api/v1alpha1"
 	"slime.io/slime/modules/pilotadmin/controllers"
 )
 

@@ -16,13 +16,13 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"slime.io/slime/framework/bootstrap"
 	"slime.io/slime/framework/util"
+	modmodel "slime.io/slime/modules/pilotadmin/model"
 	"slime.io/slime/modules/pilotadmin/source"
 	"slime.io/slime/modules/pilotadmin/source/aggregate"
 	"slime.io/slime/modules/pilotadmin/source/pilot"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	logf "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -40,7 +40,7 @@ const (
 )
 
 var (
-	log             = logf.Log.WithName("controller_pilotadmin")
+	log             = modmodel.ModuleLog
 	DebounceAfter   = 35 * time.Second // 最小静默时间，可以设置为小于pa的刷新频率的时间，如25s
 	DebounceMax     = 5 * time.Minute  // 最大延迟时间，可以设置为静默时间的几倍
 	LBWeightRange   = 0.5
@@ -373,7 +373,7 @@ func (r *ReconcilePilotAdmin) WatchSource(stop <-chan struct{}) {
 }
 
 func (r *ReconcilePilotAdmin) Reconcile(request reconcile.Request) (reconcile.Result, error) {
-	reqLogger := log.WithValues("Request.Namespace", request.Namespace, "Request.Name", request.Name)
+	reqLogger := log.WithField("Request.Namespace", request.Namespace).WithField("Request.Name", request.Name)
 	reqLogger.Info("Reconciling PilotAdmin")
 
 	// Fetch the PilotAdmin instance

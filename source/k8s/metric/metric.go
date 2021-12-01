@@ -12,15 +12,16 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"slime.io/slime/framework/model"
 	"slime.io/slime/framework/util"
+	modmodel "slime.io/slime/modules/pilotadmin/model"
 	"slime.io/slime/modules/pilotadmin/source"
 	"slime.io/slime/modules/pilotadmin/source/k8s"
 
 	"k8s.io/client-go/kubernetes"
 )
 
-var log = logf.Log.WithName("source_k8s_metric_source")
+var log = modmodel.ModuleLog.WithField(model.LogFieldKeyPkg, "source_k8s_metric_source")
 
 // PodMetricsList : PodMetricsList
 type PodMetricsList struct {
@@ -145,7 +146,7 @@ func metricTimerHandler(m *k8s.Source) {
 }
 
 func metricGetHandler(m *k8s.Source, meta types.NamespacedName) map[string]string {
-	reqLogger := log.WithValues("Request.Namespace", meta.Namespace, "Request.Name", meta.Name)
+	reqLogger := log.WithField("Request.Namespace", meta.Namespace).WithField("Request.Name", meta.Name)
 	material := make(map[string]string)
 	if _, ok := m.Interest.Get(meta.Namespace + "/" + meta.Name); !ok {
 		return material

@@ -18,14 +18,15 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"slime.io/slime/framework/model"
+	modmodel "slime.io/slime/modules/pilotadmin/model"
 	"slime.io/slime/modules/pilotadmin/source"
 	"slime.io/slime/modules/pilotadmin/source/k8s"
 )
 
 const PilotStatusUrl = ":8080/admin/status"
 
-var log = logf.Log.WithName("source_pilot_source")
+var log = modmodel.ModuleLog.WithField(model.LogFieldKeyPkg, "source_pilot_source")
 
 type PodStatus struct {
 	Qps         float64 `json:"qps"`
