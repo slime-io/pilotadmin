@@ -116,7 +116,7 @@ func (r *ReconcilePilotAdmin) Refresh(request reconcile.Request, args map[string
 			}
 			status[k] = ps
 		} else {
-			log.Error(nil, "status is nil", "pod", k)
+			log.Errorf("pod %s status is nil", "pod")
 		}
 	}
 	pilotStatus := api.PilotAdminStatus{
@@ -194,7 +194,7 @@ func (r *ReconcilePilotAdmin) process(instance *api.PilotAdmin, pod string, ep *
 }
 
 func requestLimit(ip string, request int) {
-	log.Info("开始设置xds请求限流", "pod", ip)
+	log.Infof("开始设置xds请求限流 %s", ip)
 	url := fmt.Sprintf(ip+RequestLimitAdmin+"?request=%d", request)
 	res, err := http.Get(HttpSchema + url)
 	if err != nil {
@@ -208,7 +208,7 @@ func requestLimit(ip string, request int) {
 }
 
 func connectionLimit(ip string, connection int, cluster int) {
-	log.Info("开始设置xds链接数限流", "pod", ip)
+	log.Infof("开始设置xds链接数限流 %s", ip)
 	url := fmt.Sprintf(ip+ConnectionLimitAdmin+"?maxConnection=%d&maxCluster=%d", connection, cluster)
 	res, err := http.Get(HttpSchema + url)
 	if err != nil {
@@ -265,7 +265,7 @@ func (r *ReconcilePilotAdmin) processLoadBalance(ns, name string) {
 
 func (lb *averageConLoadBalance) CalLoadBalance(admin *api.PilotAdmin) {
 	paAddr := admin.Namespace + "/" + admin.Name
-	log.Info("LoadBalance: LB计算", "PilotAdmin", paAddr)
+	log.Infof("LoadBalance: LB计算 %s", paAddr)
 	var sumCon int64
 	var minCon int64 = math.MaxInt64
 	for key, val := range admin.Status.Endpoints {
@@ -285,7 +285,7 @@ func (lb *averageConLoadBalance) CalLoadBalance(admin *api.PilotAdmin) {
 	}
 	averageCon := sumCon / admin.Status.Replicas
 	if averageCon < 2 {
-		log.Info("LoadBalance: 平均连接数小于2，不进行LB处理", "AverageConnection", averageCon, "PilotAdmin", paAddr)
+		log.Infof("LoadBalance: 平均连接数 %d 小于2，不进行LB处理: %s", averageCon, paAddr)
 		return
 	}
 
@@ -301,7 +301,7 @@ func (lb *averageConLoadBalance) CalLoadBalance(admin *api.PilotAdmin) {
 func (lb *averageConLoadBalance) doLoadBalance(admin *api.PilotAdmin, averageCon int64, weightPercent float32) {
 
 	paAddr := admin.Namespace + "/" + admin.Name
-	log.Info("LoadBalance: 开始处理负载均衡", "PilotAdmin", paAddr, "AvgCon", averageCon, "weightPercent", weightPercent)
+	log.Infof("LoadBalance: 开始处理负载均衡 %s, avgCon %d, weightPercent: %f", paAddr, averageCon, weightPercent)
 	weightAvg := float32(averageCon) * (1 + weightPercent)
 	for key, val := range admin.Status.Endpoints {
 		v := val.Status["connections"]
@@ -317,7 +317,7 @@ func (lb *averageConLoadBalance) doLoadBalance(admin *api.PilotAdmin, averageCon
 				return
 			} else {
 				if disconn > 0 {
-					log.Info("LoadBalance: 触发pilot的负载均衡", "podName", key, "podIP", ip, "disconnection", disconn)
+					log.Infof("LoadBalance: 触发pilot的负载均衡 pod %s ip %s, disconn %d", key, ip, disconn)
 					lbAttr := &LoadBalanceAttr{
 						ip:            ip,
 						disconnection: disconn,
@@ -331,7 +331,7 @@ func (lb *averageConLoadBalance) doLoadBalance(admin *api.PilotAdmin, averageCon
 			}
 		}
 	}
-	log.Info("LoadBalance: 处理负载均衡完毕", "PilotAdmin", paAddr, "AvgCon", averageCon, "weightPercent", weightPercent)
+	log.Infof("LoadBalance: 处理负载均衡完毕 %s, avgCon %d, weightPercent %f", paAddr, averageCon, weightPercent)
 }
 
 func (lb *averageConLoadBalance) SetLB2Pilot(lbattr *LoadBalanceAttr) error {
@@ -424,15 +424,15 @@ func DoUpdate(i metav1.Object, args ...interface{}) error {
 
 			paAddr := instance.Namespace + "/" + instance.Name
 			if ok := this.pilotLBEventChan.SetIfAbsent(paAddr, make(chan *api.PilotAdmin)); ok {
-				log.Info("LoadBalance: 启动goroutine处理lb事件", "PilotAdmin instance", paAddr)
+				log.Infof("LoadBalance: 启动goroutine处理lb事件 %s", paAddr)
 				go this.processLoadBalance(instance.Namespace, instance.Name)
 			}
 
 			// 判断是否需要lb
 			if instance.Status.Replicas < 2 {
-				log.Info("LoadBalance: Pilot Replicas数量小于2, 不进行负载均衡处理", "Replicas", instance.Status.Replicas)
+				log.Infof("LoadBalance: Pilot Replicas %d 数量小于2, 不进行负载均衡处理", instance.Status.Replicas)
 			} else if len(instance.Status.Endpoints) < 2 {
-				log.Info("LoadBalance: Pilot Endpoints数量小于2, 不进行负载均衡处理", "Endpoints", len(instance.Status.Endpoints))
+				log.Infof("LoadBalance: Pilot Endpoints %d 数量小于2, 不进行负载均衡处理", len(instance.Status.Endpoints))
 			} else {
 				if inter, ok := this.pilotLBEventChan.Get(paAddr); ok {
 					channel := inter.(chan *api.PilotAdmin)
@@ -458,7 +458,7 @@ func DoRemove(request reconcile.Request, args ...interface{}) error {
 			close(chann.(chan *api.PilotAdmin))
 		}
 		this.pilotLBEventChan.Remove(paAddr)
-		log.Info("LoadBalance: PilotAdmin资源移除", "PilotAdmin", paAddr)
+		log.Infof("LoadBalance: PilotAdmin资源移除 %s", paAddr)
 	}
 	return nil
 }

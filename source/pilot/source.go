@@ -47,14 +47,14 @@ func (s *PodSource) Get(podIP string) map[string]string {
 	if podIP != "" {
 		res, err := http.Get("http://" + podIP + PilotStatusUrl)
 		if err != nil || res.StatusCode != 200 {
-			log.Error(err, "获取pilot status信息失败", "pod", podIP)
+			log.Errorf("获取pilot %s status信息失败: %v", podIP, err)
 			return nil
 		}
 		body, err := ioutil.ReadAll(res.Body)
 		ps := &PodStatus{}
 		err = json.Unmarshal(body, ps)
 		if err != nil {
-			log.Error(err, "解析pilot status信息失败", "pod", podIP)
+			log.Errorf("解析pilot %s status信息失败: %v", podIP, err)
 			return nil
 		}
 		ret["qps"] = fmt.Sprintf("%d", int(ps.Qps))
@@ -133,7 +133,7 @@ func epGetHandler(m *k8s.Source, meta types.NamespacedName) map[string]string {
 	for _, client := range m.K8sClient {
 		eps, err := client.CoreV1().Endpoints(meta.Namespace).Get(meta.Name, metav1.GetOptions{})
 		if err != nil {
-			log.Error(err, "获取endpoints时出错")
+			log.Errorf("获取endpoints时出错: %v", err)
 			return nil
 		}
 		for _, subset := range eps.Subsets {
