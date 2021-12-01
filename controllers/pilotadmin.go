@@ -14,10 +14,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
-	k8ssource "sigs.k8s.io/controller-runtime/pkg/source"
 	"slime.io/slime/framework/bootstrap"
 	"slime.io/slime/framework/util"
-	controller2 "slime.io/slime/modules/pilotadmin/controller"
 	"slime.io/slime/modules/pilotadmin/source"
 	"slime.io/slime/modules/pilotadmin/source/aggregate"
 	"slime.io/slime/modules/pilotadmin/source/pilot"
@@ -26,8 +24,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	logf "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	api "slime.io/slime/modules/pilotadmin/api/v1alpha1"
@@ -58,12 +54,6 @@ type averageConLoadBalance struct{}
 * business logic.  Delete these comments after modifying this file.*
  */
 
-// Add creates a new PilotAdmin Controller and adds it to the Manager. The Manager will set fields on the Controller
-// and Start it when the Manager is Started.
-func Add(mgr manager.Manager, env *bootstrap.Environment) error {
-	return add(mgr, NewReconciler(mgr, env))
-}
-
 // NewReconciler returns a new reconcile.Reconciler
 func NewReconciler(mgr manager.Manager, env *bootstrap.Environment) *ReconcilePilotAdmin {
 	eventChan := make(chan source.Event)
@@ -89,23 +79,6 @@ func NewReconciler(mgr manager.Manager, env *bootstrap.Environment) *ReconcilePi
 	r.source.Start(env.Stop)
 	r.WatchSource(env.Stop)
 	return r
-}
-
-// add adds a new Controller to mgr with r as the reconcile.Reconciler
-func add(mgr manager.Manager, r reconcile.Reconciler) error {
-	// Create a new controller
-	c, err := controller.New("pilotadmin-controller", mgr, controller.Options{Reconciler: r})
-	if err != nil {
-		return err
-	}
-
-	// Watch for changes to primary resource PilotAdmin
-	err = c.Watch(&k8ssource.Kind{Type: &api.PilotAdmin{}}, &handler.EnqueueRequestForObject{})
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 // blank assignment to verify that ReconcilePilotAdmin implements reconcile.Reconciler
@@ -413,22 +386,11 @@ func (r *ReconcilePilotAdmin) Reconcile(request reconcile.Request) (reconcile.Re
 
 	// 资源删除
 	if err != nil && errors.IsNotFound(err) {
-		for _, f := range controller2.DeleteHook[controller2.PilotAdmin] {
-			if err := f(request, r); err != nil {
-				return reconcile.Result{}, err
-			}
-		}
-		return reconcile.Result{}, nil
+		return reconcile.Result{}, DoRemove(request, r)
 	}
 
 	// 资源更新
-	for _, f := range controller2.UpdateHook[controller2.PilotAdmin] {
-		if err := f(instance, r); err != nil {
-			return reconcile.Result{}, err
-		}
-	}
-
-	return reconcile.Result{}, nil
+	return reconcile.Result{}, DoUpdate(instance, r)
 }
 
 func (r *ReconcilePilotAdmin) SetupWithManager(mgr manager.Manager) error {
