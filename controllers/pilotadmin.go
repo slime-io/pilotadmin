@@ -250,7 +250,7 @@ func (r *ReconcilePilotAdmin) processLoadBalance(ns, name string) {
 		case <-timeChan:
 			lastDuration := time.Since(lastReceiveTime)
 			firstDuration := time.Since(firstReceiveTime)
-			if lastDuration > DebounceAfter || firstDuration > DebounceMax { // 最近一次事件发生时间距今是否超过了静默时间 或者超过了最大等待时间
+			if admin != nil && (lastDuration > DebounceAfter || firstDuration > DebounceMax) { // 最近一次事件发生时间距今是否超过了静默时间 或者超过了最大等待时间
 				point := admin
 				go r.lbStrategy.CalLoadBalance(point)
 				debouncedEvents = 0
@@ -264,7 +264,6 @@ func (r *ReconcilePilotAdmin) processLoadBalance(ns, name string) {
 }
 
 func (lb *averageConLoadBalance) CalLoadBalance(admin *api.PilotAdmin) {
-
 	paAddr := admin.Namespace + "/" + admin.Name
 	log.Info("LoadBalance: LB计算", "PilotAdmin", paAddr)
 	var sumCon int64
