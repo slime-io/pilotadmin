@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package slime.microservice.pilotadmin.v1alpha1;
+
+option go_package = "slime.io/slime/modules/pilotadmin/api/config/v1alpha1";
+
+message Bar {
+  string x = 1;
+}
+
+message General {// general module
+  string foo = 1;
+  Bar bar = 2;
+}

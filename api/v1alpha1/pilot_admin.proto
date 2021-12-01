@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+package slime.microservice.pilotadmin.v1alpha1;
+
+option go_package = "slime.io/slime/modules/pilotadmin/api/config/v1alpha1";
+
+// $schema: netease.microservice.v1alpha1.PilotAdmin
+// $title: Pilot Admin
+// $description: pilot管理接口，用于配置pilot的限流负载均衡等能力
+// $location:
+// $aliases:
+//
+// 用例如下：
+//
+// ```yaml
+// apiVersion: networking.istio.io/v1alpha3
+// kind: DestinationRule
+// metadata:
+//   name: bookinfo-ratings
+// spec:
+//   pilot_selector:
+//     istio-env: istio-system
+//   limitConditions:
+//   - {request}<1000
+//   - {connections}/{cpu}<50
+//   loadbalance:
+//     weight: 0.2
+// ```
+// 限流有如下几种配置：
+// 1. per_cpu_xds: 每个核可以承载的xds连接数
+// 2. per_pod_xds：每个pod可以承载的xds连接数
+// 3. per_cpu_cluster: 每个核可以承载的推送cluster个数，cluster个数=Sum(每个负载须发现的服务个数)
+// 4. per_pod_cluster: 每个pod可以承载的推送cluster个数
+
+// pilot管理接口配置
+message PilotAdminSpec {
+    // 通过pilot_selector选择目标pilot实例
+    map<string, string> pilot_selector = 1;
+    Limit limit = 2;
+    message Limit {
+        string qps = 1;
+        string connections = 2;
+        string clusters = 3;
+    }
+    LoadBalance loadbalance = 3;
+    message LoadBalance {
+        float weight = 1;
+    }
+}
+
+// 记录pilot的负载状态
+message PilotAdminStatus {
+    // pilot副本数量
+    int64 replicas = 1;
+
+    // pilot单个endpoint的状态记录
+    message EndpointStatus {
+        map<string, string> status = 1;
+    }
+    // value： {pod_name} key: ep状态
+    map<string, EndpointStatus> endpoints = 2;
+}

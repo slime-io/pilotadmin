@@ -1,0 +1,18 @@
+---
+apiVersion: config.netease.com/v1alpha1
+kind: SlimeBoot
+metadata:
+  name: pilotadmin
+  namespace: mesh-operator
+spec:
+  image:
+    pullPolicy: Always
+    repository: slimeio/slime-pilotadmin
+    tag: xxx  # should be replaced with actual repo/tag
+  module:
+    - name: pilotadmin
+      enable: true
+      general:  # module config proto
+        foo: xx
+        bar:
+          x: yy
