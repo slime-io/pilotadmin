@@ -66,15 +66,15 @@ func NewReconciler(mgr manager.Manager, env *bootstrap.Environment) *ReconcilePi
 	podSource := pilot.NewPodSource([]*kubernetes.Clientset{env.K8SClient})
 	lbs := &averageConLoadBalance{}
 	r := &ReconcilePilotAdmin{
-		client:           mgr.GetClient(),
-		scheme:           mgr.GetScheme(),
-		eventChan:        eventChan,
-		source:           src,
-		metricInfo:       cmap.New(),
-		podSource:        podSource,
-		pilotLBEventChan: cmap.New(),
-		lbStrategy:       lbs,
-		stop:             env.Stop,
+		client:              mgr.GetClient(),
+		scheme:              mgr.GetScheme(),
+		eventChan:           eventChan,
+		source:              src,
+		metricInfo:          cmap.New(),
+		podSource:           podSource,
+		pilotLBEventChanMap: cmap.New(),
+		lbStrategy:          lbs,
+		stop:                env.Stop,
 	}
 	r.source.Start(env.Stop)
 	r.WatchSource(env.Stop)
@@ -99,8 +99,8 @@ type ReconcilePilotAdmin struct {
 	source         source.Source
 	podSource      *pilot.PodSource
 
-	pilotLBEventChan cmap.ConcurrentMap
-	lbStrategy       loadBalanceStrategy
+	pilotLBEventChanMap cmap.ConcurrentMap
+	lbStrategy          loadBalanceStrategy
 
 	stop <-chan struct{}
 }
@@ -156,40 +156,46 @@ func (r *ReconcilePilotAdmin) process(instance *api.PilotAdmin, pod string, ep *
 	spec := instance.Spec.Limit
 	if ep.Status == nil {
 		log.Error(fmt.Errorf("status未设置"), "status未设置", "pod", pod)
+		return
 	}
-	if ip, ok := ep.Status["ip"]; !ok {
+	ip, ok := ep.Status["ip"]
+	if !ok {
 		log.Error(fmt.Errorf("ip未设置"), "ip未设置", "pod", pod)
-	} else {
-		qps, err := util.CalculateTemplateString(spec.Qps, ep.Status)
-		if err != nil {
-			log.Error(err, "计算限流额度时出错", "condition", spec.Qps, "status", ep.Status)
-		}
-		if i, ok := r.metricInfo.Get(ip + RequestLimit); ok {
-			if i != qps {
-				requestLimit(ip, qps)
-				r.metricInfo.Set(ip, qps)
-			}
-		} else {
+		return
+	}
+
+	qps, err := util.CalculateTemplateString(spec.Qps, ep.Status)
+	if err != nil {
+		log.Error(err, "计算限流额度时出错", "condition", spec.Qps, "status", ep.Status)
+		return
+	}
+	if m, ok := r.metricInfo.Get(ip + RequestLimit); ok {
+		if m != qps {
 			requestLimit(ip, qps)
-			r.metricInfo.Set(ip+RequestLimit, qps)
+			r.metricInfo.Set(ip, qps)
 		}
+	} else {
+		requestLimit(ip, qps)
+		r.metricInfo.Set(ip+RequestLimit, qps)
+	}
 
-		connections, err := util.CalculateTemplateString(spec.Connections, ep.Status)
-		if err != nil {
-			log.Error(err, "计算限流额度时出错", "condition", spec.Connections, "status", ep.Status)
-		}
-		clusters, err := util.CalculateTemplateString(spec.Clusters, ep.Status)
-		if err != nil {
-			log.Error(err, "计算限流额度时出错", "condition", spec.Clusters, "status", ep.Status)
-		}
+	connections, err := util.CalculateTemplateString(spec.Connections, ep.Status)
+	if err != nil {
+		log.Errorf("计算限流额度时出错, condition %v status %v, err %v", spec.Connections, ep.Status, err)
+		return
+	}
+	clusters, err := util.CalculateTemplateString(spec.Clusters, ep.Status)
+	if err != nil {
+		log.Error("计算限流额度时出错, condition %v status %v, err %v", spec.Clusters, ep.Status, err)
+		return
+	}
 
-		oldConnection, _ := r.metricInfo.Get(ip + ConnectionLimit)
-		oldCluster, _ := r.metricInfo.Get(ip + ClusterLimit)
-		if oldConnection != connections || oldCluster != clusters {
-			connectionLimit(ip, connections, clusters)
-			r.metricInfo.Set(ip+ConnectionLimit, connections)
-			r.metricInfo.Set(ip+ClusterLimit, clusters)
-		}
+	oldConnection, _ := r.metricInfo.Get(ip + ConnectionLimit)
+	oldCluster, _ := r.metricInfo.Get(ip + ClusterLimit)
+	if oldConnection != connections || oldCluster != clusters {
+		connectionLimit(ip, connections, clusters)
+		r.metricInfo.Set(ip+ConnectionLimit, connections)
+		r.metricInfo.Set(ip+ClusterLimit, clusters)
 	}
 }
 
@@ -198,13 +204,15 @@ func requestLimit(ip string, request int) {
 	url := fmt.Sprintf(ip+RequestLimitAdmin+"?request=%d", request)
 	res, err := http.Get(HttpSchema + url)
 	if err != nil {
-		log.Error(err, "设置失败", "pod", ip)
+		log.Errorf("设置失败, pod %s err %v", ip, err)
+		return
 	}
 	if res == nil || res.StatusCode != 200 {
-		log.Error(fmt.Errorf("pilot端错误"), "设置失败", "pod", ip)
-	} else {
-		log.Info("设置成功")
+		log.Errorf("pilot端错误, 设置失败 %s", ip)
+		return
 	}
+
+	log.Info("设置成功")
 }
 
 func connectionLimit(ip string, connection int, cluster int) {
@@ -212,31 +220,26 @@ func connectionLimit(ip string, connection int, cluster int) {
 	url := fmt.Sprintf(ip+ConnectionLimitAdmin+"?maxConnection=%d&maxCluster=%d", connection, cluster)
 	res, err := http.Get(HttpSchema + url)
 	if err != nil {
-		log.Error(err, "设置失败", "pod", ip)
+		log.Errorf("设置失败, %s", ip)
+		return
 	}
 	if res == nil || res.StatusCode != 200 {
-		log.Error(fmt.Errorf("pilot端错误"), "设置失败", "pod", ip)
-	} else {
-		log.Info("设置成功")
-	}
-}
-
-func (r *ReconcilePilotAdmin) processLoadBalance(ns, name string) {
-
-	var eventChan chan *api.PilotAdmin
-	paAddr := ns + "/" + name
-	if inter, ok := r.pilotLBEventChan.Get(paAddr); ok {
-		eventChan = inter.(chan *api.PilotAdmin)
-	} else {
-		log.Error(fmt.Errorf("LoadBalance: goroutine 处理LB失败，无可用channel"), "pilot地址", paAddr)
+		log.Errorf("pilot端错误, 设置失败 %s", ip)
 		return
 	}
 
-	var timeChan <-chan time.Time
-	var lastReceiveTime time.Time
-	var firstReceiveTime time.Time
-	debouncedEvents := 0
-	var admin *api.PilotAdmin
+	log.Info("设置成功")
+}
+
+func (r *ReconcilePilotAdmin) processLoadBalance(eventChan chan *api.PilotAdmin) {
+	var (
+		timeChan         <-chan time.Time
+		lastReceiveTime  time.Time
+		firstReceiveTime time.Time
+		debouncedEvents  = 0
+		admin            *api.PilotAdmin
+	)
+
 	// 去抖 并 触发负载均衡
 	for {
 		select {
@@ -266,26 +269,31 @@ func (r *ReconcilePilotAdmin) processLoadBalance(ns, name string) {
 func (lb *averageConLoadBalance) CalLoadBalance(admin *api.PilotAdmin) {
 	paAddr := admin.Namespace + "/" + admin.Name
 	log.Infof("LoadBalance: LB计算 %s", paAddr)
+	if admin.Status.Replicas == 0 {
+		return
+	}
+
 	var sumCon int64
 	var minCon int64 = math.MaxInt64
 	for key, val := range admin.Status.Endpoints {
 		v, ok := val.Status["connections"]
 		if !ok {
-			log.Error(fmt.Errorf("LoadBalance: 获取connections不存在"), "podName", key)
+			log.Error("LoadBalance: %s 获取connections不存在", key)
 			return
 		}
 		con, err := strconv.ParseInt(v, 10, 64)
 		if err != nil {
+			log.Errorf("LoadBalance: %s 获取connections不合法 %s", key, v)
 			return
 		}
 		if con < minCon {
 			minCon = con
 		}
-		sumCon = sumCon + con
+		sumCon += con
 	}
 	averageCon := sumCon / admin.Status.Replicas
 	if averageCon < 2 {
-		log.Infof("LoadBalance: 平均连接数 %d 小于2，不进行LB处理: %s", averageCon, paAddr)
+		log.Infof("LoadBalance: %s 平均连接数 %d 小于2，不进行LB处理", paAddr, averageCon)
 		return
 	}
 
@@ -299,58 +307,58 @@ func (lb *averageConLoadBalance) CalLoadBalance(admin *api.PilotAdmin) {
 }
 
 func (lb *averageConLoadBalance) doLoadBalance(admin *api.PilotAdmin, averageCon int64, weightPercent float32) {
-
 	paAddr := admin.Namespace + "/" + admin.Name
 	log.Infof("LoadBalance: 开始处理负载均衡 %s, avgCon %d, weightPercent: %f", paAddr, averageCon, weightPercent)
 	weightAvg := float32(averageCon) * (1 + weightPercent)
+
 	for key, val := range admin.Status.Endpoints {
 		v := val.Status["connections"]
 		con, err := strconv.ParseInt(v, 10, 64)
 		if err != nil {
+			log.Errorf("")
 			return
 		}
 
-		if (float32(con)) > (weightAvg) { // 对该实例需要触发lb,  con > averageCon*(1+weightPercent)
-			disconn := con - averageCon
-			if ip, ok := val.Status["ip"]; !ok {
-				log.Error(fmt.Errorf("LoadBalance: 获取podIp不存在"), "podName", key)
-				return
-			} else {
-				if disconn > 0 {
-					log.Infof("LoadBalance: 触发pilot的负载均衡 pod %s ip %s, disconn %d", key, ip, disconn)
-					lbAttr := &LoadBalanceAttr{
-						ip:            ip,
-						disconnection: disconn,
-						keepAliveCon:  averageCon,
-						keepLimitTime: LBKeepLimitTime,
-					}
-					if erro := lb.SetLB2Pilot(lbAttr); erro != nil {
-						return
-					}
-				}
-			}
+		if (float32(con)) <= (weightAvg) { // 对该实例需要触发lb,  con > averageCon*(1+weightPercent)
+			continue
+		}
+
+		disConn := con - averageCon
+		if disConn <= 0 {
+			continue
+		}
+		ip, ok := val.Status["ip"]
+		if !ok {
+			log.Error(fmt.Errorf("LoadBalance: 获取podIp不存在"), "podName", key)
+			return
+		}
+
+		lbAttr := LoadBalanceAttr{
+			ip:            ip,
+			disconnection: disConn,
+			keepAliveCon:  averageCon,
+			keepLimitTime: LBKeepLimitTime,
+		}
+		log.Infof("LoadBalance: 触发pilot的负载均衡 %s %+v", key, lbAttr)
+		if err = lb.SetLB2Pilot(lbAttr); err != nil {
+			log.Errorf("LoadBalance: %s %+v 负载均衡设置失败 %v", key, lbAttr, err)
+			return
 		}
 	}
 	log.Infof("LoadBalance: 处理负载均衡完毕 %s, avgCon %d, weightPercent %f", paAddr, averageCon, weightPercent)
 }
 
-func (lb *averageConLoadBalance) SetLB2Pilot(lbattr *LoadBalanceAttr) error {
-
+func (lb *averageConLoadBalance) SetLB2Pilot(lbattr LoadBalanceAttr) error {
 	url := fmt.Sprintf(lbattr.ip+LoadBalanceAdmin+"?disconnect=%d&keepcon=%d&keepcontime=%d",
 		lbattr.disconnection, lbattr.keepAliveCon, lbattr.keepLimitTime)
 	res, err := http.Get(HttpSchema + url)
 	if err != nil {
-		log.Error(err, "LoadBalance: 负载均衡设置失败", "podIP", lbattr.ip, "disconnection", lbattr.disconnection, "keepCon", lbattr.keepAliveCon, "keepLimitTime", lbattr.keepLimitTime)
-		return fmt.Errorf("LoadBalance: 负载均衡设置失败")
+		return err
 	}
 	if res.StatusCode == 200 {
-		log.Info("LoadBalance: 负载均衡设置成功",
-			"podIP", lbattr.ip, "disconnection", lbattr.disconnection,
-			"keepCon", lbattr.keepAliveCon, "keepLimitTime", lbattr.keepLimitTime)
 		return nil
 	} else {
-		log.Error(fmt.Errorf("LoadBalance: 负载均衡pilot端错误"), "负载均衡设置失败", "podIP", lbattr.ip, "disconnection", lbattr.disconnection, "keepCon", lbattr.keepAliveCon, "keepLimitTime", lbattr.keepLimitTime)
-		return fmt.Errorf("LoadBalance: 负载均衡pilot端错误")
+		return fmt.Errorf("LoadBalance: 负载均衡pilot端错误 status code %d", res.StatusCode)
 	}
 }
 
@@ -403,42 +411,46 @@ func DoUpdate(i metav1.Object, args ...interface{}) error {
 		log.Error(nil, "pilotAdmin doUpdate方法参数不足")
 		return nil
 	}
-	if this, ok := args[0].(*ReconcilePilotAdmin); !ok {
+	this, ok := args[0].(*ReconcilePilotAdmin)
+	if !ok {
 		log.Error(nil, "pilotAdmin doUpdate方法参数不足")
+		return nil
+	}
+	instance, ok := i.(*api.PilotAdmin)
+	if !ok {
+		log.Error(nil, "pilotAdmin doUpdate方法第一参数需为自身")
+		return nil
+	}
+
+	statusEps := instance.Status.Endpoints
+	// 如果状态为空，需获取状态后再进行限流管理
+
+	this.source.WatchAdd(types.NamespacedName{
+		Namespace: instance.Namespace,
+		Name:      instance.Name,
+	})
+
+	// 状态不为空，直接进行限流管理
+	for k, ep := range statusEps {
+		this.process(instance, k, ep)
+	}
+
+	paAddr := instance.Namespace + "/" + instance.Name
+	eventChan := make(chan *api.PilotAdmin)
+	if ok = this.pilotLBEventChanMap.SetIfAbsent(paAddr, eventChan); ok {
+		log.Infof("LoadBalance: 启动goroutine处理lb事件 %s", paAddr)
+		go this.processLoadBalance(eventChan)
+	}
+
+	// 判断是否需要lb
+	if instance.Status.Replicas < 2 {
+		log.Infof("LoadBalance: Pilot Replicas %d 数量小于2, 不进行负载均衡处理", instance.Status.Replicas)
+	} else if len(instance.Status.Endpoints) < 2 {
+		log.Infof("LoadBalance: Pilot Endpoints %d 数量小于2, 不进行负载均衡处理", len(instance.Status.Endpoints))
 	} else {
-		if instance, ok := i.(*api.PilotAdmin); !ok {
-			log.Error(nil, "pilotAdmin doUpdate方法第一参数需为自身")
-		} else {
-			eps := instance.Status.Endpoints
-			// 如果状态为空，需获取状态后再进行限流管理
-
-			this.source.WatchAdd(types.NamespacedName{
-				Namespace: instance.Namespace,
-				Name:      instance.Name,
-			})
-
-			// 状态不为空，直接进行限流管理
-			for k, ep := range eps {
-				this.process(instance, k, ep)
-			}
-
-			paAddr := instance.Namespace + "/" + instance.Name
-			if ok := this.pilotLBEventChan.SetIfAbsent(paAddr, make(chan *api.PilotAdmin)); ok {
-				log.Infof("LoadBalance: 启动goroutine处理lb事件 %s", paAddr)
-				go this.processLoadBalance(instance.Namespace, instance.Name)
-			}
-
-			// 判断是否需要lb
-			if instance.Status.Replicas < 2 {
-				log.Infof("LoadBalance: Pilot Replicas %d 数量小于2, 不进行负载均衡处理", instance.Status.Replicas)
-			} else if len(instance.Status.Endpoints) < 2 {
-				log.Infof("LoadBalance: Pilot Endpoints %d 数量小于2, 不进行负载均衡处理", len(instance.Status.Endpoints))
-			} else {
-				if inter, ok := this.pilotLBEventChan.Get(paAddr); ok {
-					channel := inter.(chan *api.PilotAdmin)
-					channel <- instance
-				}
-			}
+		if inter, ok := this.pilotLBEventChanMap.Get(paAddr); ok {
+			channel := inter.(chan *api.PilotAdmin)
+			channel <- instance
 		}
 	}
 	return nil
@@ -449,16 +461,18 @@ func DoRemove(request reconcile.Request, args ...interface{}) error {
 		log.Error(nil, "pilotAdmin DoRemove方法参数不足")
 		return nil
 	}
-	if this, ok := args[0].(*ReconcilePilotAdmin); !ok {
+	this, ok := args[0].(*ReconcilePilotAdmin)
+	if !ok {
 		log.Error(nil, "pilotAdmin DoRemove方法第一参数需为自身")
-	} else {
-		paAddr := request.Namespace + "/" + request.Name
-		this.source.WatchRemove(request.NamespacedName)
-		if chann, ok := this.pilotLBEventChan.Get(paAddr); ok {
-			close(chann.(chan *api.PilotAdmin))
-		}
-		this.pilotLBEventChan.Remove(paAddr)
-		log.Infof("LoadBalance: PilotAdmin资源移除 %s", paAddr)
+		return nil
 	}
+
+	paAddr := request.Namespace + "/" + request.Name
+	this.source.WatchRemove(request.NamespacedName)
+	if ch, ok := this.pilotLBEventChanMap.Get(paAddr); ok {
+		this.pilotLBEventChanMap.Remove(paAddr)
+		close(ch.(chan *api.PilotAdmin))
+	}
+	log.Infof("LoadBalance: PilotAdmin资源移除 %s", paAddr)
 	return nil
 }

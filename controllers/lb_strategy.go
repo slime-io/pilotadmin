@@ -6,7 +6,7 @@ import (
 
 type loadBalanceStrategy interface {
 	CalLoadBalance(admin *api.PilotAdmin)
-	SetLB2Pilot(lb *LoadBalanceAttr) error
+	SetLB2Pilot(lb LoadBalanceAttr) error
 }
 
 type LoadBalanceAttr struct {
