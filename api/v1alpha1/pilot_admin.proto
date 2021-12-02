@@ -45,6 +45,7 @@ message PilotAdminSpec {
     LoadBalance loadbalance = 3;
     message LoadBalance {
         float weight = 1;
+        int32 diff = 2;
     }
 }
 

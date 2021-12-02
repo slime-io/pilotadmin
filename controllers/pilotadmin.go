@@ -268,10 +268,11 @@ func (r *ReconcilePilotAdmin) processLoadBalance(eventChan chan *api.PilotAdmin)
 
 func (lb *averageConLoadBalance) CalLoadBalance(admin *api.PilotAdmin) {
 	paAddr := admin.Namespace + "/" + admin.Name
-	log.Infof("LoadBalance: LB计算 %s", paAddr)
-	if admin.Status.Replicas == 0 {
+	specLb := admin.Spec.Loadbalance
+	if admin.Status.Replicas == 0 || specLb == nil {
 		return
 	}
+	log.Infof("LoadBalance: LB计算 %s", paAddr)
 
 	var sumCon int64
 	var minCon int64 = math.MaxInt64
@@ -291,25 +292,36 @@ func (lb *averageConLoadBalance) CalLoadBalance(admin *api.PilotAdmin) {
 		}
 		sumCon += con
 	}
-	averageCon := sumCon / admin.Status.Replicas
-	if averageCon < 2 {
-		log.Infof("LoadBalance: %s 平均连接数 %d 小于2，不进行LB处理", paAddr, averageCon)
+
+	acgCon := sumCon / admin.Status.Replicas
+	if acgCon < 2 {
+		log.Infof("LoadBalance: %s 平均连接数 %d 小于2，不进行LB处理", paAddr, acgCon)
 		return
 	}
 
-	weightPercent := admin.Spec.Loadbalance.Weight
-	if (float32(averageCon) * (1 - weightPercent)) > (float32(minCon)) { // averageCon*(1-weightPercent) > minCon
+	weight := admin.Spec.Loadbalance.Weight
+	diff := int64(weight * float32(acgCon))
+	if lbDiff := int64(specLb.Diff); lbDiff > 0 {
+		if minCon+lbDiff > acgCon {
+			return
+		}
+
+		if lbDiff > diff {
+			diff = lbDiff
+		}
+	}
+	if acgCon-diff > minCon { // min < avg-diff < avg, then min ->  avg-diff <- avg
 		// 有可能是新扩容实例。做全局lb。只要大于平均连接，就触发lb
-		lb.doLoadBalance(admin, averageCon, 0)
-	} else {
-		lb.doLoadBalance(admin, averageCon, weightPercent)
+		lb.doLoadBalance(admin, acgCon, 0)
+	} else { // avg-diff < min < avg, then min ->  avg <- avg+diff
+		lb.doLoadBalance(admin, acgCon, diff)
 	}
 }
 
-func (lb *averageConLoadBalance) doLoadBalance(admin *api.PilotAdmin, averageCon int64, weightPercent float32) {
+func (lb *averageConLoadBalance) doLoadBalance(admin *api.PilotAdmin, averageCon int64, diff int64) {
 	paAddr := admin.Namespace + "/" + admin.Name
-	log.Infof("LoadBalance: 开始处理负载均衡 %s, avgCon %d, weightPercent: %f", paAddr, averageCon, weightPercent)
-	weightAvg := float32(averageCon) * (1 + weightPercent)
+	log.Infof("LoadBalance: 开始处理负载均衡 %s, avgCon %d, diff: %d", paAddr, averageCon, diff)
+	avgPlusDiff := averageCon + diff
 
 	for key, val := range admin.Status.Endpoints {
 		v := val.Status["connections"]
@@ -319,7 +331,7 @@ func (lb *averageConLoadBalance) doLoadBalance(admin *api.PilotAdmin, averageCon
 			return
 		}
 
-		if (float32(con)) <= (weightAvg) { // 对该实例需要触发lb,  con > averageCon*(1+weightPercent)
+		if con <= avgPlusDiff { // 对该实例需要触发lb,  con > averageCon*(1+weightPercent)
 			continue
 		}
 
@@ -345,7 +357,7 @@ func (lb *averageConLoadBalance) doLoadBalance(admin *api.PilotAdmin, averageCon
 			return
 		}
 	}
-	log.Infof("LoadBalance: 处理负载均衡完毕 %s, avgCon %d, weightPercent %f", paAddr, averageCon, weightPercent)
+	log.Infof("LoadBalance: 处理负载均衡完毕 %s, avgCon %d, diff %d", paAddr, averageCon, diff)
 }
 
 func (lb *averageConLoadBalance) SetLB2Pilot(lbattr LoadBalanceAttr) error {
